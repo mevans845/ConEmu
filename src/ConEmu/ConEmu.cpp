@@ -1692,10 +1692,11 @@ DWORD CConEmuMain::FixWindowStyle(DWORD dwStyle, ConEmuWindowMode wmNewMode /*= 
 	else if (gpConEmu->isCaptionHidden(wmNewMode))
 	{
 		// Required to force window sizing
-		dwStyle &= ~WS_SYSMENU;
+		// dwStyle &= ~WS_SYSMENU;
 		//Win& & Quake - не работает "Slide up/down" если есть ThickFrame
 		//if ((gpSet->isQuakeStyle == 0) // не для Quake. Для него нужна рамка, чтобы ресайзить
-		dwStyle &= ~(WS_CAPTION|WS_THICKFRAME|WS_DLGFRAME);
+		dwStyle &= ~WS_CAPTION;
+		dwStyle |= WS_THICKFRAME|WS_SYSMENU;
 	}
 	else
 	{

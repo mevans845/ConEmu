@@ -187,6 +187,10 @@ public:
 		RECT Win10Frame;
 		// Per-monitor DPI
 		int Xdpi, Ydpi;
+		// Default *visible* frame width for resizeable windows
+		int FrameWidth;
+		// Default offsets for client area of a resizeable window with caption
+		RECT FrameCaption;
 	};
 protected:
 	MSectionSimple mcs_monitors = MSectionSimple(true);

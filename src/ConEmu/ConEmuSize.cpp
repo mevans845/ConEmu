@@ -215,6 +215,8 @@ RECT CConEmuSize::CalcMargins_FrameCaption(DWORD/*enum ConEmuMargins*/ mg, ConEm
 
 	bool processed = false;
 
+	const MonitorInfoCache mi = NearestMonitorInfo(NULL);
+
 	if (!processed && bHideCaption)
 	{
 		_ASSERTE((mg & ((DWORD)CEM_FRAMECAPTION)) != CEM_CAPTION);
@@ -222,14 +224,22 @@ RECT CConEmuSize::CalcMargins_FrameCaption(DWORD/*enum ConEmuMargins*/ mg, ConEm
 		{
 			// We'll hide frame partially with UpdateWindowRgn if our frame is invisible
 			// so, frame may be larger than visible part
-			rc.left = rc.right = rc.top = rc.bottom = GetSelfFrameWidth();
+			if (mi.HasWin10Frame)
+			{
+				rc = mi.Win10Frame;
+				// rc.top = mi.Win10Frame.bottom; // no caption?
+			}
+			else
+			{
+				// #SIZE_TODO What?
+				rc.left = rc.right = rc.top = rc.bottom = GetSelfFrameWidth();
+			}
 		}
 		processed = true;
 	}
 
 	if (!processed)
 	{
-		const MonitorInfoCache mi = NearestMonitorInfo(NULL);
 		DWORD dwStyle = mp_ConEmu->GetWindowStyle();
 		if (wmNewMode != wmCurrent)
 			dwStyle = mp_ConEmu->FixWindowStyle(dwStyle, wmNewMode);
@@ -1498,6 +1508,35 @@ void CConEmuSize::ReloadMonitorInfo()
 		monitors.push_back(mi);
 	}
 
+	// Use WS_OVERLAPPEDWINDOW instead of GetWindowStyle(), we need to know frame width for "normal" window,
+	// to emulate it in GetSelfFrameWidth() even if our window has no WS_THICKFRAME
+	const DWORD style = WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_OVERLAPPEDWINDOW;
+	const DWORD exStyle = WS_EX_LAYERED;
+
+	int std_frame_width = GetSystemMetrics(SM_CXFRAME);
+	for (INT_PTR i = 0; i < monitors.size(); ++i)
+	{
+		// default frame width
+		monitors[i].FrameWidth = std_frame_width;
+
+		// Per-monitor DPI
+		DpiValue dpi;
+		CDpiAware::QueryDpiForMonitor(monitors[i].hMon, &dpi);
+		monitors[i].Xdpi = dpi.Xdpi;
+		monitors[i].Ydpi = dpi.Ydpi;
+
+		const int nTestWidth = 100, nTestHeight = 100;
+		RECT rcTest = MakeRect(nTestWidth,nTestHeight);
+		if (mp_ConEmu->AdjustWindowRectExForDpi(&rcTest, style, FALSE, exStyle, dpi.Ydpi))
+		{
+			RECT& rc = monitors[i].FrameCaption;
+			rc.left = -rcTest.left;
+			rc.right = rcTest.right - nTestWidth;
+			rc.bottom = rcTest.bottom - nTestHeight;
+			rc.top = -rcTest.top;
+		}
+	}
+
 	// *** Query information about invisible parts of Win10 frame ***
 	if (IsWin10())
 	{
@@ -1544,9 +1583,6 @@ void CConEmuSize::ReloadMonitorInfo()
 
 		if (RegisterClassEx(&wc))
 		{
-			// #SIZE_TODO Use WS_OVERLAPPED instead of GetWindowStyle(), we need to know frame width for "normal" window, to emulate it in GetSelfFrameWidth()
-			DWORD style = mp_ConEmu->GetWindowStyle();
-			DWORD exStyle = WS_EX_LAYERED;
 			HWND hFrame = CreateWindowEx(exStyle, szFrameClass, L"", style, 100, 100, 400, 200, NULL, NULL, (HINSTANCE)g_hInstance, NULL);
 			if (hFrame)
 			{
@@ -1597,18 +1633,17 @@ void CConEmuSize::ReloadMonitorInfo()
 		}
 	}
 
-	for (INT_PTR i = 0; i < monitors.size(); ++i)
+	if (IsWin10())
 	{
-		// Default values for Win10
-		if (!monitors[i].HasWin10Frame && IsWin10())
+		for (INT_PTR i = 0; i < monitors.size(); ++i)
 		{
-			monitors[i].Win10Frame = MakeRect(7, 0, 7, 7);
+			MonitorInfoCache& mi = monitors[i];
+			// Default values for Win10 if for unknown reason we failed to retrieve them
+			if (mi.HasWin10Frame)
+				mi.Win10Frame = MakeRect(7, 0, 7, 7);
+			// Correct FrameWidth taking into account hidden frame parts
+			mi.FrameWidth = klMax<int>(1, (mi.FrameCaption.left - mi.Win10Frame.left));
 		}
-		// Per-monitor DPI
-		DpiValue dpi;
-		CDpiAware::QueryDpiForMonitor(monitors[i].hMon, &dpi);
-		monitors[i].Xdpi = dpi.Xdpi;
-		monitors[i].Ydpi = dpi.Ydpi;
 	}
 
 	mp_ConEmu->RecalculateFrameSizes();
@@ -5900,6 +5935,8 @@ HRGN CConEmuSize::CreateWindowRgn(bool abTestOnly/*=false*/)
 					}
 				}
 
+
+				// Take the value form gpSet because we need to apply it over calculated size
 				int nFrame = gpSet->HideCaptionAlwaysFrame();
 				bool bFullFrame = (nFrame < 0);
 				if (bFullFrame)
@@ -5908,8 +5945,13 @@ HRGN CConEmuSize::CreateWindowRgn(bool abTestOnly/*=false*/)
 				}
 				else
 				{
-					_ASSERTE(rcFrame.left>=nFrame);
-					_ASSERTE(rcFrame.top>=nFrame);
+					const int min_frame = klMin(rcFrame.left, rcFrame.top);
+					if (nFrame > min_frame)
+					{
+						_ASSERTE(rcFrame.left>=nFrame);
+						_ASSERTE(rcFrame.top>=nFrame);
+						nFrame = min_frame;
+					}
 				}
 
 
@@ -6095,14 +6137,23 @@ bool CConEmuSize::isCaptionHidden(ConEmuWindowMode wmNewMode /*= wmCurrent*/)
 
 UINT CConEmuSize::GetSelfFrameWidth()
 {
+	//return 0;
 	if (mp_ConEmu->isInside())
+		return 0;
+	// #SIZE_TODO Favor standard Win10 frame to get nice shadow around the window
+	// #SIZE_TODO Take into account Quake sliding mode
+	if (IsWin10())
 		return 0;
 	// Take into account user setting but don't allow frame larger than system-defined
 	int iFrame = gpSet->HideCaptionAlwaysFrame();
 	// #SIZE_TODO Reuse frame width from monitors cache
+	const MonitorInfoCache mi = CConEmuSize::NearestMonitorInfo(NULL);
 	int iStdFrame = mp_ConEmu->GetWinFrameWidth();
-	if (iFrame <= 0 || iFrame > iStdFrame)
-		iFrame = iStdFrame;
+	int iDefFrame = mi.FrameWidth;
+	if (iFrame < 0)
+		iFrame = iDefFrame; // 1 pixel in Win10
+	else if (iFrame == 0 || iFrame > iStdFrame)
+		iFrame = iStdFrame; // allow comfortable resize area on mouse hover
 	return static_cast<UINT>(iFrame);
 }
 

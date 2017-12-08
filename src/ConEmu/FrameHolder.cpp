@@ -828,7 +828,7 @@ bool CFrameHolder::OnNcCalcSize(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 	bool bCallDefProc = true;
 
 	RECT rcMargins = {};
-	if (!mp_ConEmu->isCaptionHidden())
+	//if (!mp_ConEmu->isCaptionHidden())
 		rcMargins = mp_ConEmu->CalcMargins(CEM_FRAMECAPTION);
 
 	if (wParam)
